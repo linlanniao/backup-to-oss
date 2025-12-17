@@ -6,22 +6,6 @@
 
 `backup-to-oss` 是一个命令行工具，旨在简化目录备份流程，特别适用于：
 
-- **自动化备份**: 通过命令行或脚本实现自动化备份，无需手动操作
-- **多目录备份**: 支持同时备份多个目录，提高备份效率
-- **灵活配置**: 支持通过环境变量、配置文件或命令行参数进行配置
-- **智能压缩**: 自动将目录压缩为 gzip 格式（.tgz），节省存储空间和传输时间
-- **文件过滤**: 支持 glob 模式排除不需要备份的文件或目录（如日志文件、node_modules 等）
-- **云端存储**: 自动上传到阿里云 OSS，实现异地备份，保障数据安全
-- **IP 标识**: 自动获取公网 IP 并在 OSS 路径中使用，方便区分不同服务器的备份
-
-### 典型使用场景
-
-- 服务器数据定期备份
-- 开发环境配置备份
-- 数据库备份文件上传
-- 日志归档存储
-- CI/CD 流程中的文件备份
-
 ## 功能特性
 
 - ✅ 支持单个或多个目录备份
@@ -226,7 +210,7 @@ backup-to-oss dir
 
 ```bash
 # 每天凌晨 2 点备份
-0 2 * * * /usr/local/bin/backup-to-oss dir --path /important/data --env-file /etc/backup.env >> /var/log/backup.log 2>&1
+0 2 * * * /usr/local/bin/backup-to-oss dir --path /important/data --env-file /etc/backup.env --log-dir /var/log/
 ```
 
 ## 版本信息
