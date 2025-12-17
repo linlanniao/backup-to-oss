@@ -38,13 +38,13 @@
 ### 快速安装
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/linlanniao/backup-go-oss/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/linlanniao/backup-to-oss/main/install.sh | bash
 ```
 
 或者下载脚本后执行：
 
 ```bash
-wget https://raw.githubusercontent.com/linlanniao/backup-go-oss/main/install.sh
+wget https://raw.githubusercontent.com/linlanniao/backup-to-oss/main/install.sh
 chmod +x install.sh
 sudo ./install.sh
 ```
@@ -62,7 +62,7 @@ sudo ./install.sh
 
 如果一键安装脚本无法使用，也可以手动下载二进制文件：
 
-1. 访问 [Releases 页面](https://github.com/linlanniao/backup-go-oss/releases)
+1. 访问 [Releases 页面](https://github.com/linlanniao/backup-to-oss/releases)
 2. 下载对应系统的二进制文件
 3. 解压并移动到 PATH 目录：
 

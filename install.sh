@@ -10,7 +10,7 @@ NC='\033[0m' # No Color
 
 # 配置变量
 REPO_OWNER="linlanniao"
-REPO_NAME="backup-go-oss"
+REPO_NAME="backup-to-oss"
 BINARY_NAME="backup-to-oss"
 INSTALL_DIR="/usr/local/bin"
 
