@@ -2,8 +2,6 @@ package controller
 
 import (
 	"context"
-	"crypto/tls"
-	"crypto/x509"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -11,14 +9,10 @@ import (
 	"time"
 
 	"backup-to-oss/internal/compress"
+	"backup-to-oss/internal/etcd"
 	"backup-to-oss/internal/ipfetcher"
 	"backup-to-oss/internal/logger"
 	"backup-to-oss/internal/oss"
-
-	"go.etcd.io/etcd/client/pkg/v3/logutil"
-	clientv3 "go.etcd.io/etcd/client/v3"
-	snapshot "go.etcd.io/etcd/client/v3/snapshot"
-	"go.uber.org/zap"
 )
 
 // EtcdBackupRequest etcd snapshot 备份请求
@@ -41,55 +35,6 @@ type EtcdBackupRequest struct {
 
 // EtcdBackup 执行 etcd snapshot 备份
 func EtcdBackup(req EtcdBackupRequest) error {
-	// 创建 logger
-	lg, err := logutil.CreateDefaultZapLogger(zap.InfoLevel)
-	if err != nil {
-		return fmt.Errorf("创建 logger 失败: %v", err)
-	}
-
-	// 构建 etcd 客户端配置
-	cfg := clientv3.Config{
-		Endpoints:   req.Endpoints,
-		DialTimeout: req.DialTimeout,
-	}
-
-	// 配置 TLS（如果提供了证书）
-	if req.CACert != "" || req.Cert != "" || req.Key != "" {
-		tlsConfig := &tls.Config{}
-
-		// 加载 CA 证书
-		if req.CACert != "" {
-			caCert, err := os.ReadFile(req.CACert)
-			if err != nil {
-				return fmt.Errorf("读取 CA 证书失败: %v", err)
-			}
-			caCertPool := x509.NewCertPool()
-			if !caCertPool.AppendCertsFromPEM(caCert) {
-				return fmt.Errorf("解析 CA 证书失败")
-			}
-			tlsConfig.RootCAs = caCertPool
-		}
-
-		// 加载客户端证书和私钥
-		if req.Cert != "" && req.Key != "" {
-			cert, err := tls.LoadX509KeyPair(req.Cert, req.Key)
-			if err != nil {
-				return fmt.Errorf("加载客户端证书失败: %v", err)
-			}
-			tlsConfig.Certificates = []tls.Certificate{cert}
-		}
-
-		cfg.TLS = tlsConfig
-	}
-
-	// 配置用户名和密码（如果提供了）
-	if req.User != "" && req.Password != "" {
-		cfg.Username = req.User
-		cfg.Password = req.Password
-	}
-
-	logger.Info("正在连接 etcd", "endpoints", strings.Join(req.Endpoints, ","))
-
 	// 创建上下文（如果设置了命令超时）
 	ctx := context.Background()
 	var cancel context.CancelFunc
@@ -109,25 +54,22 @@ func EtcdBackup(req EtcdBackupRequest) error {
 
 	logger.Info("正在获取 etcd snapshot", "path", tempSnapshotPath)
 
-	// 使用 etcd 官方库保存 snapshot（传递值而不是指针）
-	version, err := snapshot.SaveWithVersion(ctx, lg, cfg, tempSnapshotPath)
+	// 调用 etcd 包执行备份
+	backupCfg := etcd.BackupConfig{
+		Endpoints:      req.Endpoints,
+		CACert:         req.CACert,
+		Cert:           req.Cert,
+		Key:            req.Key,
+		User:           req.User,
+		Password:       req.Password,
+		DialTimeout:    req.DialTimeout,
+		CommandTimeout: req.CommandTimeout,
+	}
+
+	result, err := etcd.Backup(ctx, backupCfg, tempSnapshotPath)
 	if err != nil {
-		return fmt.Errorf("保存 etcd snapshot 失败: %v", err)
+		return err
 	}
-
-	logger.Info("Snapshot 保存成功", "path", tempSnapshotPath, "version", version)
-
-	// 验证 snapshot 文件
-	fileInfo, err := os.Stat(tempSnapshotPath)
-	if err != nil {
-		return fmt.Errorf("获取 snapshot 文件信息失败: %v", err)
-	}
-	if fileInfo.Size() == 0 {
-		return fmt.Errorf("snapshot 文件为空")
-	}
-
-	logger.Info("Snapshot 验证成功", "size_bytes", fileInfo.Size(), "size_mb", fmt.Sprintf("%.2f", float64(fileInfo.Size())/(1024*1024)))
-
 	defer os.Remove(tempSnapshotPath)
 
 	// 压缩 snapshot 文件
@@ -156,15 +98,18 @@ func EtcdBackup(req EtcdBackupRequest) error {
 	defer os.Remove(compressedPath)
 
 	// 获取压缩后的文件大小
-	compressedInfo, err := os.Stat(compressedPath)
+	fileInfo, err := os.Stat(tempSnapshotPath)
 	if err == nil {
-		originalSizeMB := float64(fileInfo.Size()) / (1024 * 1024)
-		compressedSizeMB := float64(compressedInfo.Size()) / (1024 * 1024)
-		ratio := float64(compressedInfo.Size()) / float64(fileInfo.Size()) * 100
-		logger.Info("压缩完成",
-			"original_size_mb", fmt.Sprintf("%.2f", originalSizeMB),
-			"compressed_size_mb", fmt.Sprintf("%.2f", compressedSizeMB),
-			"compression_ratio", fmt.Sprintf("%.1f%%", ratio))
+		compressedInfo, err := os.Stat(compressedPath)
+		if err == nil {
+			originalSizeMB := float64(fileInfo.Size()) / (1024 * 1024)
+			compressedSizeMB := float64(compressedInfo.Size()) / (1024 * 1024)
+			ratio := float64(compressedInfo.Size()) / float64(fileInfo.Size()) * 100
+			logger.Info("压缩完成",
+				"original_size_mb", fmt.Sprintf("%.2f", originalSizeMB),
+				"compressed_size_mb", fmt.Sprintf("%.2f", compressedSizeMB),
+				"compression_ratio", fmt.Sprintf("%.1f%%", ratio))
+		}
 	}
 
 	// 获取公网IP（用于 OSS 路径）
@@ -207,6 +152,7 @@ func EtcdBackup(req EtcdBackupRequest) error {
 		return fmt.Errorf("上传到 OSS 失败: %v", err)
 	}
 
-	logger.Info("etcd snapshot 备份完成", "version", version)
+	logger.Info("etcd snapshot 备份完成", "version", result.Version)
 	return nil
 }
+

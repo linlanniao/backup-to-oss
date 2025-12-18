@@ -1,4 +1,4 @@
-package inspect
+package consul
 
 import (
 	"encoding/json"
@@ -7,8 +7,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/hashicorp/go-hclog"
 	"github.com/hashicorp/consul/snapshot"
+	"github.com/hashicorp/go-hclog"
 	"github.com/hashicorp/raft"
 )
 

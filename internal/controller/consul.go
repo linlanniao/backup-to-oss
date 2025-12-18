@@ -10,12 +10,11 @@ import (
 	"time"
 
 	"backup-to-oss/internal/compress"
-	"backup-to-oss/internal/inspect"
+	"backup-to-oss/internal/consul"
 	"backup-to-oss/internal/ipfetcher"
 	"backup-to-oss/internal/logger"
 	"backup-to-oss/internal/oss"
 
-	"github.com/hashicorp/consul/api"
 	"github.com/rboyer/safeio"
 )
 
@@ -34,36 +33,18 @@ type ConsulBackupRequest struct {
 
 // ConsulBackup 执行 Consul snapshot 备份
 func ConsulBackup(req ConsulBackupRequest) error {
-	// 创建 Consul API 客户端配置
-	config := api.DefaultConfig()
-	if req.ConsulAddress != "" {
-		config.Address = req.ConsulAddress
-	}
-	if req.ConsulToken != "" {
-		config.Token = req.ConsulToken
+	// 调用 consul 包执行备份
+	backupCfg := consul.BackupConfig{
+		Address: req.ConsulAddress,
+		Token:   req.ConsulToken,
+		Stale:   req.Stale,
 	}
 
-	// 创建 Consul 客户端
-	client, err := api.NewClient(config)
+	result, err := consul.Backup(backupCfg)
 	if err != nil {
-		return fmt.Errorf("创建 Consul 客户端失败: %v", err)
+		return err
 	}
-
-	logger.Info("正在连接 Consul", "address", config.Address)
-
-	// 获取快照
-	logger.Info("正在获取 Consul snapshot")
-	queryOptions := &api.QueryOptions{
-		AllowStale: req.Stale,
-	}
-
-	snap, qm, err := client.Snapshot().Save(queryOptions)
-	if err != nil {
-		return fmt.Errorf("获取 Consul snapshot 失败: %v", err)
-	}
-	defer snap.Close()
-
-	logger.Info("Snapshot 获取成功", "last_index", qm.LastIndex)
+	defer result.Snapshot.Close()
 
 	// 创建临时文件用于保存 snapshot
 	now := time.Now()
@@ -74,7 +55,7 @@ func ConsulBackup(req ConsulBackupRequest) error {
 
 	// 先写入未验证的文件
 	logger.Info("正在保存 snapshot 到临时文件", "path", unverifiedPath)
-	if _, err := safeio.WriteToFile(snap, unverifiedPath, 0600); err != nil {
+	if _, err := safeio.WriteToFile(result.Snapshot, unverifiedPath, 0600); err != nil {
 		return fmt.Errorf("写入 snapshot 文件失败: %v", err)
 	}
 	defer os.Remove(unverifiedPath)
@@ -118,7 +99,7 @@ func ConsulBackup(req ConsulBackupRequest) error {
 
 	// 执行 inspect 操作验证 snapshot 完整性
 	logger.Info("正在执行 snapshot inspect 操作")
-	snapshotInfo, err := inspect.InspectSnapshot(tempSnapshotPath)
+	snapshotInfo, err := consul.InspectSnapshot(tempSnapshotPath)
 	if err != nil {
 		return fmt.Errorf("snapshot inspect 失败，文件可能已损坏: %v", err)
 	}
@@ -206,6 +187,6 @@ func ConsulBackup(req ConsulBackupRequest) error {
 		return fmt.Errorf("上传到 OSS 失败: %v", err)
 	}
 
-	logger.Info("Consul snapshot 备份完成", "last_index", qm.LastIndex)
+	logger.Info("Consul snapshot 备份完成", "last_index", result.LastIndex)
 	return nil
 }
