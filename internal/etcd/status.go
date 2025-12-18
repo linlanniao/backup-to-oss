@@ -5,10 +5,21 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/coreos/go-semver/semver"
+	"go.etcd.io/etcd/pkg/v3/traceutil"
+	"go.etcd.io/etcd/server/v3/lease"
 	"go.etcd.io/etcd/server/v3/storage/backend"
 	"go.etcd.io/etcd/server/v3/storage/mvcc"
 	"go.uber.org/zap"
 )
+
+// noOpCluster 是一个 no-op cluster 实现，用于只读的 snapshot status 检查
+type noOpCluster struct{}
+
+func (c *noOpCluster) Version() *semver.Version {
+	// 返回一个默认版本，对于只读操作来说足够了
+	return semver.New("3.6.0")
+}
 
 // SnapshotStatusInfo 包含 etcd snapshot 的状态信息
 type SnapshotStatusInfo struct {
@@ -38,15 +49,24 @@ func CheckSnapshotStatus(filePath string) (*SnapshotStatusInfo, error) {
 	be := backend.NewDefaultBackend(lg, filePath)
 	defer be.Close()
 
+	// 创建 no-op cluster 用于 lessor
+	cluster := &noOpCluster{}
+
+	// 创建 lessor（租约管理器）用于 snapshot 恢复
+	// 对于只读的 status 检查，我们需要创建一个 lessor 来避免 panic
+	lessor := lease.NewLessor(lg, be, cluster, lease.LessorConfig{})
+	defer lessor.Stop()
+
 	// 创建 mvcc store 来读取 snapshot
-	store := mvcc.NewStore(lg, be, nil, mvcc.StoreConfig{})
+	store := mvcc.NewStore(lg, be, lessor, mvcc.StoreConfig{})
 	defer store.Close()
 
 	// 获取当前修订版本
 	rev := store.Rev()
 
 	// 使用 Read 方法创建一个只读事务来验证 snapshot
-	txn := store.Read(mvcc.ConcurrentReadTxMode, nil)
+	// 使用 traceutil.TODO() 而不是 nil，避免 nil pointer dereference
+	txn := store.Read(mvcc.ConcurrentReadTxMode, traceutil.TODO())
 	defer txn.End()
 
 	// 计算总键数和总大小
