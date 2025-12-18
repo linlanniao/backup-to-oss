@@ -133,13 +133,55 @@ fi
 
 # 构建下载 URL
 VERSION="${LATEST_TAG#v}"  # 移除 'v' 前缀（如果有）
-FILE_NAME="${BINARY_NAME}_${VERSION}_${OS_NAME}_${ARCH}.tar.gz"
-DOWNLOAD_URL="https://github.com/${REPO_OWNER}/${REPO_NAME}/releases/download/${LATEST_TAG}/${FILE_NAME}"
 
-# 如果 tar.gz 不存在，尝试 zip
-if ! (curl -sI "$DOWNLOAD_URL" 2>/dev/null | head -n 1 | grep -q "200 OK"); then
-    FILE_NAME="${BINARY_NAME}_${VERSION}_${OS_NAME}_${ARCH}.zip"
+# 从 GitHub API 获取实际的 release assets
+echo "正在查找可用的发布文件..."
+ASSETS_JSON=""
+if command -v curl &> /dev/null; then
+    ASSETS_JSON=$(curl -s "https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/releases/tags/${LATEST_TAG}" 2>/dev/null || echo "")
+else
+    ASSETS_JSON=$(wget -qO- "https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/releases/tags/${LATEST_TAG}" 2>/dev/null || echo "")
+fi
+
+# 查找匹配的 asset（优先 tar.gz，其次 zip）
+FILE_NAME=""
+DOWNLOAD_URL=""
+if [ -n "$ASSETS_JSON" ] && echo "$ASSETS_JSON" | grep -q '"assets"'; then
+    if command -v jq &> /dev/null; then
+        # 如果有 jq，使用它来解析 JSON
+        FILE_NAME=$(echo "$ASSETS_JSON" | jq -r ".assets[] | select(.name | test(\"${BINARY_NAME}_${VERSION}_${OS_NAME}_${ARCH}\\.(tar\\.gz|zip)\")) | .name" | head -1)
+        DOWNLOAD_URL=$(echo "$ASSETS_JSON" | jq -r ".assets[] | select(.name | test(\"${BINARY_NAME}_${VERSION}_${OS_NAME}_${ARCH}\\.(tar\\.gz|zip)\")) | .browser_download_url" | head -1)
+    else
+        # 如果没有 jq，使用 grep 和 sed
+        # 优先查找 tar.gz
+        FILE_NAME=$(echo "$ASSETS_JSON" | grep -o "\"name\":\"${BINARY_NAME}_${VERSION}_${OS_NAME}_${ARCH}\\.tar\\.gz\"" | sed 's/.*"name":"\([^"]*\)".*/\1/' | head -1)
+        DOWNLOAD_URL=$(echo "$ASSETS_JSON" | grep -A 1 "\"name\":\"${BINARY_NAME}_${VERSION}_${OS_NAME}_${ARCH}\\.tar\\.gz\"" | grep "\"browser_download_url\"" | sed 's/.*"browser_download_url":"\([^"]*\)".*/\1/' | head -1)
+        
+        # 如果 tar.gz 不存在，尝试 zip
+        if [ -z "$FILE_NAME" ]; then
+            FILE_NAME=$(echo "$ASSETS_JSON" | grep -o "\"name\":\"${BINARY_NAME}_${VERSION}_${OS_NAME}_${ARCH}\\.zip\"" | sed 's/.*"name":"\([^"]*\)".*/\1/' | head -1)
+            DOWNLOAD_URL=$(echo "$ASSETS_JSON" | grep -A 1 "\"name\":\"${BINARY_NAME}_${VERSION}_${OS_NAME}_${ARCH}\\.zip\"" | grep "\"browser_download_url\"" | sed 's/.*"browser_download_url":"\([^"]*\)".*/\1/' | head -1)
+        fi
+    fi
+fi
+
+# 如果仍然找不到，尝试直接构建 URL（向后兼容）
+if [ -z "$FILE_NAME" ] || [ -z "$DOWNLOAD_URL" ]; then
+    FILE_NAME="${BINARY_NAME}_${VERSION}_${OS_NAME}_${ARCH}.tar.gz"
     DOWNLOAD_URL="https://github.com/${REPO_OWNER}/${REPO_NAME}/releases/download/${LATEST_TAG}/${FILE_NAME}"
+    
+    # 检查文件是否存在
+    HTTP_CODE=$(curl -sI -o /dev/null -w "%{http_code}" "$DOWNLOAD_URL" 2>/dev/null || echo "000")
+    if [ "$HTTP_CODE" != "200" ]; then
+        FILE_NAME="${BINARY_NAME}_${VERSION}_${OS_NAME}_${ARCH}.zip"
+        DOWNLOAD_URL="https://github.com/${REPO_OWNER}/${REPO_NAME}/releases/download/${LATEST_TAG}/${FILE_NAME}"
+        HTTP_CODE=$(curl -sI -o /dev/null -w "%{http_code}" "$DOWNLOAD_URL" 2>/dev/null || echo "000")
+        if [ "$HTTP_CODE" != "200" ]; then
+            echo -e "${RED}错误: 无法找到适用于 $OS_NAME/$ARCH 的发布文件${NC}"
+            echo "请访问 https://github.com/${REPO_OWNER}/${REPO_NAME}/releases/tag/${LATEST_TAG} 查看可用的文件"
+            exit 1
+        fi
+    fi
 fi
 
 echo "下载地址: $DOWNLOAD_URL"
@@ -152,13 +194,31 @@ trap "rm -rf $TMP_DIR" EXIT
 # 下载文件
 echo "正在下载..."
 if command -v curl &> /dev/null; then
-    curl -L -o "$TMP_DIR/$FILE_NAME" "$DOWNLOAD_URL"
+    HTTP_CODE=$(curl -L -o "$TMP_DIR/$FILE_NAME" -w "%{http_code}" "$DOWNLOAD_URL" 2>/dev/null || echo "000")
+    if [ "$HTTP_CODE" != "200" ]; then
+        echo -e "${RED}错误: 下载失败 (HTTP $HTTP_CODE)${NC}"
+        exit 1
+    fi
 else
-    wget -O "$TMP_DIR/$FILE_NAME" "$DOWNLOAD_URL"
+    if ! wget -O "$TMP_DIR/$FILE_NAME" "$DOWNLOAD_URL" 2>/dev/null; then
+        echo -e "${RED}错误: 下载失败${NC}"
+        exit 1
+    fi
 fi
 
+# 验证下载的文件
 if [ ! -f "$TMP_DIR/$FILE_NAME" ]; then
-    echo -e "${RED}错误: 下载失败${NC}"
+    echo -e "${RED}错误: 下载失败，文件不存在${NC}"
+    exit 1
+fi
+
+# 检查文件大小（至少应该大于 100 字节）
+FILE_SIZE=$(stat -f%z "$TMP_DIR/$FILE_NAME" 2>/dev/null || stat -c%s "$TMP_DIR/$FILE_NAME" 2>/dev/null || echo "0")
+if [ "$FILE_SIZE" -lt 100 ]; then
+    echo -e "${RED}错误: 下载的文件大小异常 ($FILE_SIZE 字节)，可能是下载失败${NC}"
+    echo "文件内容预览:"
+    head -c 200 "$TMP_DIR/$FILE_NAME" 2>/dev/null || true
+    echo ""
     exit 1
 fi
 
