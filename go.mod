@@ -6,7 +6,7 @@ require (
 	github.com/aliyun/aliyun-oss-go-sdk v3.0.2+incompatible
 	github.com/coreos/go-semver v0.3.1
 	github.com/hashicorp/consul v1.22.2
-	github.com/hashicorp/consul-net-rpc v0.0.0-20221205195236-156cfab66a69
+	github.com/hashicorp/consul-net-rpc v0.0.0-20250728073021-c7e89c86ae17
 	github.com/hashicorp/consul/api v1.33.0
 	github.com/hashicorp/go-hclog v1.6.3
 	github.com/hashicorp/raft v1.7.3
