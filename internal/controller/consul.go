@@ -104,12 +104,33 @@ func ConsulBackup(req ConsulBackupRequest) error {
 	if err != nil {
 		return fmt.Errorf("snapshot inspect 失败，文件可能已损坏: %v", err)
 	}
+
+	// 输出基本信息
 	logger.Info("Snapshot inspect 成功",
 		"id", snapshotInfo.ID,
 		"index", snapshotInfo.Index,
 		"term", snapshotInfo.Term,
 		"size", snapshotInfo.Size,
 		"version", snapshotInfo.Version)
+
+	// 输出详细的类型统计信息
+	if len(snapshotInfo.Stats) > 0 {
+		logger.Info("Snapshot 详细统计信息:")
+		// 输出每种类型的统计
+		for _, stat := range snapshotInfo.Stats {
+			sizeStr := formatByteSize(stat.Size)
+			logger.Info("",
+				"type", stat.Name,
+				"count", stat.Count,
+				"size", sizeStr)
+		}
+		// 输出总计
+		totalSizeStr := formatByteSize(snapshotInfo.TotalSize)
+		logger.Info("",
+			"type", "Total",
+			"count", "",
+			"size", totalSizeStr)
+	}
 
 	// 压缩 snapshot 文件
 	compressMethod := req.CompressMethod
@@ -201,4 +222,40 @@ func ConsulBackup(req ConsulBackupRequest) error {
 		logger.Info("Consul snapshot 备份完成", "last_index", result.LastIndex)
 	}
 	return nil
+}
+
+// formatByteSize 格式化字节大小为人类可读的格式
+func formatByteSize(bytes int64) string {
+	const (
+		KB = 1024
+		MB = KB * 1024
+		GB = MB * 1024
+		TB = GB * 1024
+	)
+
+	var unit string
+	var value float64
+
+	switch {
+	case bytes >= TB:
+		unit = "TB"
+		value = float64(bytes) / TB
+	case bytes >= GB:
+		unit = "GB"
+		value = float64(bytes) / GB
+	case bytes >= MB:
+		unit = "MB"
+		value = float64(bytes) / MB
+	case bytes >= KB:
+		unit = "KB"
+		value = float64(bytes) / KB
+	default:
+		return fmt.Sprintf("%dB", bytes)
+	}
+
+	// 保留一位小数，如果小数部分为0则不显示
+	if value == float64(int64(value)) {
+		return fmt.Sprintf("%.0f%s", value, unit)
+	}
+	return fmt.Sprintf("%.1f%s", value, unit)
 }
