@@ -11,6 +11,7 @@ import (
 // Config 应用配置
 type Config struct {
 	DirPaths        []string // 支持多个目录
+	FilePaths       []string // 支持多个文件
 	ExcludePatterns []string // 排除模式列表
 	CompressMethod  string   // 压缩方式 (zstd/gzip/none)
 	OSSEndpoint     string
@@ -48,6 +49,19 @@ func LoadConfig(envFile string) (*Config, error) {
 		}
 	}
 
+	// 解析多个文件（逗号分隔）
+	filesStr := getEnvOrDefault("FILES_TO_BACKUP", "")
+	var filePaths []string
+	if filesStr != "" {
+		files := strings.Split(filesStr, ",")
+		for _, file := range files {
+			file = strings.TrimSpace(file)
+			if file != "" {
+				filePaths = append(filePaths, file)
+			}
+		}
+	}
+
 	// 解析排除模式（逗号分隔）
 	excludeStr := getEnvOrDefault("EXCLUDE_PATTERNS", "")
 	var excludePatterns []string
@@ -66,6 +80,7 @@ func LoadConfig(envFile string) (*Config, error) {
 
 	cfg := &Config{
 		DirPaths:        dirPaths,
+		FilePaths:       filePaths,
 		ExcludePatterns: excludePatterns,
 		CompressMethod:  compressMethod,
 		OSSEndpoint:     getEnvOrDefault("OSS_ENDPOINT", ""),
@@ -128,10 +143,66 @@ func (c *Config) MergeWithFlags(dirPath, excludePatterns, compressMethod, endpoi
 	}
 }
 
-// Validate 验证配置是否完整
+// MergeWithFileFlags 将命令行参数合并到配置中（用于文件备份，命令行参数优先级更高）
+func (c *Config) MergeWithFileFlags(filePath, compressMethod, endpoint, accessKey, secretKey, bucket, prefix string) {
+	if filePath != "" {
+		// 如果命令行指定了文件，解析逗号分隔的多个文件
+		files := strings.Split(filePath, ",")
+		var filePaths []string
+		for _, file := range files {
+			file = strings.TrimSpace(file)
+			if file != "" {
+				filePaths = append(filePaths, file)
+			}
+		}
+		if len(filePaths) > 0 {
+			c.FilePaths = filePaths
+		}
+	}
+	if compressMethod != "" {
+		c.CompressMethod = compressMethod
+	}
+	if endpoint != "" {
+		c.OSSEndpoint = endpoint
+	}
+	if accessKey != "" {
+		c.OSSAccessKey = accessKey
+	}
+	if secretKey != "" {
+		c.OSSSecretKey = secretKey
+	}
+	if bucket != "" {
+		c.OSSBucket = bucket
+	}
+	if prefix != "" {
+		c.OSSObjectPrefix = prefix
+	}
+}
+
+// Validate 验证配置是否完整（用于目录备份）
 func (c *Config) Validate() error {
 	if len(c.DirPaths) == 0 {
 		return fmt.Errorf("目录路径未设置（通过 --path 参数或 DIRS_TO_BACKUP 环境变量，支持多个目录用逗号分隔）")
+	}
+	if c.OSSEndpoint == "" {
+		return fmt.Errorf("OSS端点未设置（通过 --endpoint 参数或 OSS_ENDPOINT 环境变量）")
+	}
+	if c.OSSAccessKey == "" {
+		return fmt.Errorf("OSS AccessKey未设置（通过 --access-key 参数或 OSS_ACCESS_KEY 环境变量）")
+	}
+	if c.OSSSecretKey == "" {
+		return fmt.Errorf("OSS SecretKey未设置（通过 --secret-key 参数或 OSS_SECRET_KEY 环境变量）")
+	}
+	if c.OSSBucket == "" {
+		return fmt.Errorf("OSS存储桶未设置（通过 --bucket 参数或 OSS_BUCKET 环境变量）")
+	}
+	return nil
+}
+
+// ValidateFileConfig 验证文件备份配置是否完整
+func (c *Config) ValidateFileConfig() error {
+	if len(c.FilePaths) == 0 {
+		return fmt.Errorf("文件路径未设置（通过 --path 参数或 FILES_TO_BACKUP 环境变量，支持多个文件用逗号分隔）")
 	}
 	if c.OSSEndpoint == "" {
 		return fmt.Errorf("OSS端点未设置（通过 --endpoint 参数或 OSS_ENDPOINT 环境变量）")

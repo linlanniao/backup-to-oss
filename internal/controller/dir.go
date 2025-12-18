@@ -59,7 +59,7 @@ func DirBackup(req DirBackupRequest) error {
 		if dirPathForName == "" {
 			dirPathForName = "backup"
 		}
-		
+
 		// 根据压缩方式确定文件扩展名
 		var ext string
 		switch req.CompressMethod {
@@ -138,4 +138,3 @@ func DirBackup(req DirBackupRequest) error {
 	logger.Info("所有备份任务完成", "total", len(req.DirPaths))
 	return nil
 }
-

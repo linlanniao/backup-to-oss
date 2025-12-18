@@ -252,6 +252,93 @@ func CompressFile(sourceFile, outputFile string, compressMethod string) error {
 	return nil
 }
 
+// CompressFiles 压缩多个文件到一个 tar 归档中（支持 zstd、gzip 或不压缩）
+// sourceFiles: 源文件路径列表
+// outputFile: 输出文件路径
+// compressMethod: 压缩方式 (zstd/gzip/none)，默认为 zstd
+func CompressFiles(sourceFiles []string, outputFile string, compressMethod string) error {
+	if len(sourceFiles) == 0 {
+		return fmt.Errorf("没有指定要压缩的文件")
+	}
+
+	// 创建输出文件
+	outFile, err := os.Create(outputFile)
+	if err != nil {
+		return fmt.Errorf("创建输出文件失败: %v", err)
+	}
+	defer outFile.Close()
+
+	// 根据压缩方式创建压缩 writer
+	var compressWriter io.WriteCloser
+	switch compressMethod {
+	case "gzip":
+		compressWriter = gzip.NewWriter(outFile)
+	case "zstd", "":
+		// 默认为 zstd
+		zstdWriter, err := zstd.NewWriter(outFile)
+		if err != nil {
+			return fmt.Errorf("创建 zstd writer 失败: %v", err)
+		}
+		compressWriter = zstdWriter
+	case "none":
+		// 不压缩，直接使用文件
+		compressWriter = &nopCloser{Writer: outFile}
+	default:
+		return fmt.Errorf("不支持的压缩方式: %s，支持的方式: zstd, gzip, none", compressMethod)
+	}
+	defer compressWriter.Close()
+
+	// 创建 tar writer
+	tarWriter := tar.NewWriter(compressWriter)
+	defer tarWriter.Close()
+
+	// 遍历每个文件并添加到 tar 归档中
+	for _, sourceFile := range sourceFiles {
+		// 验证文件是否存在
+		info, err := os.Stat(sourceFile)
+		if err != nil {
+			return fmt.Errorf("文件不存在: %s, %v", sourceFile, err)
+		}
+		if info.IsDir() {
+			return fmt.Errorf("路径是目录而不是文件: %s", sourceFile)
+		}
+
+		// 获取文件的绝对路径
+		absPath, err := filepath.Abs(sourceFile)
+		if err != nil {
+			return fmt.Errorf("获取绝对路径失败: %v", err)
+		}
+
+		// 创建 tar header，使用文件名（不含路径）作为归档中的名称
+		header, err := tar.FileInfoHeader(info, "")
+		if err != nil {
+			return fmt.Errorf("创建tar header失败: %v", err)
+		}
+		// 使用文件名作为归档中的名称，避免路径问题
+		header.Name = filepath.Base(sourceFile)
+
+		// 写入header
+		if err := tarWriter.WriteHeader(header); err != nil {
+			return fmt.Errorf("写入tar header失败: %v", err)
+		}
+
+		// 打开文件
+		file, err := os.Open(absPath)
+		if err != nil {
+			return fmt.Errorf("打开文件失败: %v", err)
+		}
+
+		// 复制文件内容
+		_, err = io.Copy(tarWriter, file)
+		file.Close()
+		if err != nil {
+			return fmt.Errorf("复制文件内容失败: %v", err)
+		}
+	}
+
+	return nil
+}
+
 // nopCloser 是一个包装器，将 io.Writer 转换为 io.WriteCloser（Close 方法为空操作）
 type nopCloser struct {
 	io.Writer

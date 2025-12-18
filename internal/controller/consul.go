@@ -54,7 +54,7 @@ func ConsulBackup(req ConsulBackupRequest) error {
 	queryOptions := &api.QueryOptions{
 		AllowStale: req.Stale,
 	}
-	
+
 	snap, qm, err := client.Snapshot().Save(queryOptions)
 	if err != nil {
 		return fmt.Errorf("获取 Consul snapshot 失败: %v", err)
@@ -119,7 +119,7 @@ func ConsulBackup(req ConsulBackupRequest) error {
 	if compressMethod == "" {
 		compressMethod = "zstd" // 默认使用 zstd
 	}
-	
+
 	// 根据压缩方式确定文件扩展名
 	var ext string
 	switch compressMethod {
@@ -145,7 +145,7 @@ func ConsulBackup(req ConsulBackupRequest) error {
 		originalSizeMB := float64(fileInfo.Size()) / (1024 * 1024)
 		compressedSizeMB := float64(compressedInfo.Size()) / (1024 * 1024)
 		ratio := float64(compressedInfo.Size()) / float64(fileInfo.Size()) * 100
-		logger.Info("压缩完成", 
+		logger.Info("压缩完成",
 			"original_size_mb", fmt.Sprintf("%.2f", originalSizeMB),
 			"compressed_size_mb", fmt.Sprintf("%.2f", compressedSizeMB),
 			"compression_ratio", fmt.Sprintf("%.1f%%", ratio))
@@ -194,4 +194,3 @@ func ConsulBackup(req ConsulBackupRequest) error {
 	logger.Info("Consul snapshot 备份完成", "last_index", qm.LastIndex)
 	return nil
 }
-
