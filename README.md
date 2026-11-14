@@ -9,6 +9,7 @@
 - ✅ **Consul 备份**：支持从 Consul 服务器获取 snapshot 并备份到 OSS
 - ✅ **etcd 备份**：支持从 etcd 服务器获取 snapshot 并备份到 OSS（支持 TLS 和认证）
 - ✅ **多种压缩方式**：支持 zstd（默认）、gzip 或无压缩
+- ✅ **备份密码加密**：目录、文件、Consul 和 etcd 备份均支持 age 密码加密
 - ✅ **自动上传到 OSS**：备份完成后自动上传到阿里云 OSS
 - ✅ **灵活的配置方式**：支持通过 `.env` 文件、环境变量或命令行参数配置
 - ✅ **自动获取公网 IP**：用于路径标识，便于区分不同服务器的备份
@@ -200,6 +201,8 @@ backup-to-oss etcd --etcd-endpoints http://127.0.0.1:2379 \
 ```env
 # OSS 配置
 OSS_ENDPOINT=oss-cn-hangzhou.aliyuncs.com
+# 自定义或传输加速端点需指定存储桶地域
+# OSS_REGION=cn-hangzhou
 OSS_ACCESS_KEY=your_access_key
 OSS_SECRET_KEY=your_secret_key
 OSS_BUCKET=your-bucket-name
@@ -229,6 +232,9 @@ ETCD_COMMAND_TIMEOUT=60s
 
 # 压缩配置
 COMPRESS_METHOD=zstd  # zstd/gzip/none，默认为 zstd
+
+# 密码非空时，上传和保留的产物使用 age 加密
+BACKUP_PASSWORD=
 
 # 备份文件保留配置
 KEEP_BACKUP_FILES=false  # 是否保留备份文件，默认为 false
@@ -443,13 +449,30 @@ backup-to-oss v
 
 - **zstd**（默认）：压缩率高，速度快，推荐使用
 - **gzip**：兼容性好，压缩率中等
-- **none**：不压缩，直接上传原始文件
+- **none**：不压缩。目录和多个文件仍打包成 tar，单个文件和快照保留原始格式。
 
 可以通过 `--compress` 参数或 `COMPRESS_METHOD` 环境变量指定压缩方式。
+
+## 备份密码加密与恢复
+
+在 `.env` 中设置 `BACKUP_PASSWORD='替换为你的强密码'`，并通过 `chmod 600 .env` 限制文件权限。也可以由运行环境注入 `BACKUP_PASSWORD`，其优先级高于 `.env`。密码为空时生成普通备份。
+
+`dir`、`file`、`consul`、`etcd` 的三种压缩方式都可以加密。程序在打包或压缩后使用 age 和 scrypt 加密，给上传对象和本地备份文件追加 `.age`。本地保留文件的完整路径会写入日志。
+
+下载备份后，用 age 解密并在提示时输入原密码。然后按原格式解压或交给对应工具恢复。以下示例以 zstd 目录备份为例。
+
+```bash
+age -d -o backup.tar.zst backup.tar.zst.age
+tar --zstd -xf backup.tar.zst
+```
+
+对于未额外压缩的快照（例如 `.db.age` 或 `.snap.age`），解密后即可使用原快照。
 
 ## 开发
 
 ### 构建
+
+使用 Go 1.27.4。
 
 ```bash
 go build -o backup-to-oss .

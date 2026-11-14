@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"backup-to-oss/internal/config"
 	"backup-to-oss/internal/controller"
 	"backup-to-oss/internal/logger"
 
@@ -76,7 +75,7 @@ func init() {
 
 func runEtcdBackup() error {
 	// 加载配置（从 .env 文件或环境变量）
-	cfg, err := config.LoadConfig(envFile)
+	cfg, err := loadBackupConfig()
 	if err != nil {
 		return fmt.Errorf("加载配置失败: %v", err)
 	}
@@ -166,18 +165,8 @@ func runEtcdBackup() error {
 		}
 	}
 
-	// 获取压缩方式（优先使用命令行参数，其次环境变量，最后使用默认值）
-	compressMethodValue := compressMethod
-	if compressMethodValue == "" {
-		if envCompress := os.Getenv("COMPRESS_METHOD"); envCompress != "" {
-			compressMethodValue = envCompress
-		} else {
-			compressMethodValue = "zstd" // 默认使用 zstd
-		}
-	}
-
 	// 合并命令行参数（命令行参数优先级更高）
-	cfg.MergeWithFlags("", "", compressMethodValue, ossEndpoint, ossAccessKey, ossSecretKey, ossBucket, ossObjectPrefix)
+	cfg.MergeWithFlags("", "", ossEndpoint, ossAccessKey, ossSecretKey, ossBucket, ossObjectPrefix)
 
 	// 验证 OSS 配置
 	if cfg.OSSEndpoint == "" {
@@ -204,8 +193,10 @@ func runEtcdBackup() error {
 		DialTimeout:     dialTimeoutDuration,
 		CommandTimeout:  commandTimeoutDuration,
 		CompressMethod:  cfg.CompressMethod,
+		BackupPassword:  cfg.BackupPassword,
 		KeepBackupFiles: keepBackupFilesFlag,
 		OSSEndpoint:     cfg.OSSEndpoint,
+		OSSRegion:       cfg.OSSRegion,
 		OSSAccessKey:    cfg.OSSAccessKey,
 		OSSSecretKey:    cfg.OSSSecretKey,
 		OSSBucket:       cfg.OSSBucket,

@@ -26,8 +26,10 @@ type EtcdBackupRequest struct {
 	DialTimeout     time.Duration // 连接超时时间
 	CommandTimeout  time.Duration // 命令超时时间（0 表示无超时）
 	CompressMethod  string        // 压缩方式 (zstd/gzip/none)
-	KeepBackupFiles bool          // 是否保留备份文件
+	BackupPassword  string
+	KeepBackupFiles bool // 是否保留备份文件
 	OSSEndpoint     string
+	OSSRegion       string
 	OSSAccessKey    string
 	OSSSecretKey    string
 	OSSBucket       string
@@ -51,7 +53,17 @@ func EtcdBackup(req EtcdBackupRequest) error {
 	now := time.Now()
 	timeStr := now.Format("20060102-150405")
 	snapshotName := fmt.Sprintf("etcd-snapshot-%s.db", timeStr)
-	tempSnapshotPath := filepath.Join(os.TempDir(), snapshotName)
+	workDir, err := os.MkdirTemp("", "backup-to-oss-")
+	if err != nil {
+		return fmt.Errorf("创建备份临时目录失败: %w", err)
+	}
+	keepBackup := false
+	defer func() {
+		if !keepBackup {
+			os.RemoveAll(workDir)
+		}
+	}()
+	tempSnapshotPath := filepath.Join(workDir, snapshotName)
 
 	logger.Info("正在获取 etcd snapshot", "path", tempSnapshotPath)
 
@@ -71,7 +83,6 @@ func EtcdBackup(req EtcdBackupRequest) error {
 	if err != nil {
 		return err
 	}
-	// tempSnapshotPath 在压缩完成后会被删除
 
 	// 压缩 snapshot 文件
 	compressMethod := req.CompressMethod
@@ -79,45 +90,35 @@ func EtcdBackup(req EtcdBackupRequest) error {
 		compressMethod = "zstd" // 默认使用 zstd
 	}
 
-	// 根据压缩方式确定文件扩展名
-	var ext string
-	switch compressMethod {
-	case "gzip":
-		ext = ".gz"
-	case "zstd":
-		ext = ".zst"
-	case "none":
-		ext = ""
-	default:
-		ext = ".zst" // 默认使用 zstd
+	fileInfo, err := os.Stat(tempSnapshotPath)
+	if err != nil {
+		return fmt.Errorf("获取 snapshot 文件大小失败: %w", err)
 	}
+	ext := compress.Extension(compressMethod, false, req.BackupPassword != "")
 	compressedPath := tempSnapshotPath + ext
-	logger.Info("正在压缩 snapshot 文件", "method", compressMethod)
-	if err := compress.CompressFile(tempSnapshotPath, compressedPath, compressMethod); err != nil {
-		return fmt.Errorf("压缩 snapshot 文件失败: %v", err)
+	if compressMethod != "none" || req.BackupPassword != "" {
+		logger.Info("正在处理 snapshot 文件", "method", compressMethod, "encrypted", req.BackupPassword != "")
+		if err := compress.CompressFile(tempSnapshotPath, compressedPath, compressMethod, req.BackupPassword); err != nil {
+			return fmt.Errorf("处理 snapshot 文件失败: %w", err)
+		}
+		if err := os.Remove(tempSnapshotPath); err != nil {
+			return fmt.Errorf("清理原始 snapshot 文件失败: %w", err)
+		}
 	}
-	// 压缩完成后删除未压缩的临时文件
-	if !req.KeepBackupFiles {
-		os.Remove(tempSnapshotPath)
-		defer os.Remove(compressedPath)
-	} else {
-		os.Remove(tempSnapshotPath) // 只保留压缩后的文件
+	keepBackup = req.KeepBackupFiles
+	if keepBackup {
 		logger.Info("备份文件已保留", "path", compressedPath)
 	}
 
 	// 获取压缩后的文件大小
-	fileInfo, err := os.Stat(tempSnapshotPath)
-	if err == nil {
-		compressedInfo, err := os.Stat(compressedPath)
-		if err == nil {
-			originalSizeMB := float64(fileInfo.Size()) / (1024 * 1024)
-			compressedSizeMB := float64(compressedInfo.Size()) / (1024 * 1024)
-			ratio := float64(compressedInfo.Size()) / float64(fileInfo.Size()) * 100
-			logger.Info("压缩完成",
-				"original_size_mb", fmt.Sprintf("%.2f", originalSizeMB),
-				"compressed_size_mb", fmt.Sprintf("%.2f", compressedSizeMB),
-				"compression_ratio", fmt.Sprintf("%.1f%%", ratio))
-		}
+	if compressedInfo, err := os.Stat(compressedPath); err == nil {
+		originalSizeMB := float64(fileInfo.Size()) / (1024 * 1024)
+		compressedSizeMB := float64(compressedInfo.Size()) / (1024 * 1024)
+		ratio := float64(compressedInfo.Size()) / float64(fileInfo.Size()) * 100
+		logger.Info("处理完成",
+			"original_size_mb", fmt.Sprintf("%.2f", originalSizeMB),
+			"compressed_size_mb", fmt.Sprintf("%.2f", compressedSizeMB),
+			"compression_ratio", fmt.Sprintf("%.1f%%", ratio))
 	}
 
 	// 获取公网IP（用于 OSS 路径）
@@ -150,6 +151,7 @@ func EtcdBackup(req EtcdBackupRequest) error {
 	logger.Info("正在上传 snapshot 到 OSS")
 	ossConfig := oss.Config{
 		Endpoint:     req.OSSEndpoint,
+		Region:       req.OSSRegion,
 		AccessKey:    req.OSSAccessKey,
 		SecretKey:    req.OSSSecretKey,
 		Bucket:       req.OSSBucket,

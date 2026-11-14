@@ -17,8 +17,10 @@ import (
 type FileBackupRequest struct {
 	FilePaths       []string // 支持多个文件
 	CompressMethod  string   // 压缩方式 (zstd/gzip/none)
-	KeepBackupFiles bool     // 是否保留备份文件
+	BackupPassword  string
+	KeepBackupFiles bool // 是否保留备份文件
 	OSSEndpoint     string
+	OSSRegion       string
 	OSSAccessKey    string
 	OSSSecretKey    string
 	OSSBucket       string
@@ -55,8 +57,8 @@ func FileBackup(req FileBackupRequest) error {
 			logger.Warn("无法访问文件，跳过", "path", filePath, "error", err)
 			continue
 		}
-		if info.IsDir() {
-			logger.Warn("路径是目录而不是文件，跳过", "path", filePath)
+		if !info.Mode().IsRegular() {
+			logger.Warn("路径不是普通文件，跳过", "path", filePath)
 			continue
 		}
 		validFiles = append(validFiles, filePath)
@@ -68,6 +70,17 @@ func FileBackup(req FileBackupRequest) error {
 
 	logger.Info("开始备份文件", "count", len(validFiles), "files", validFiles)
 
+	workDir, err := os.MkdirTemp("", "backup-to-oss-")
+	if err != nil {
+		return fmt.Errorf("创建备份临时目录失败: %w", err)
+	}
+	keepBackup := false
+	defer func() {
+		if !keepBackup {
+			os.RemoveAll(workDir)
+		}
+	}()
+
 	// 根据文件数量决定处理方式
 	var archivePath string
 	if len(validFiles) == 1 {
@@ -76,20 +89,9 @@ func FileBackup(req FileBackupRequest) error {
 		fileName := filepath.Base(sourceFile)
 		fileNameWithoutExt := strings.TrimSuffix(fileName, filepath.Ext(fileName))
 
-		// 根据压缩方式确定文件扩展名
-		var ext string
-		switch req.CompressMethod {
-		case "gzip":
-			ext = ".gz"
-		case "zstd", "":
-			ext = ".zst"
-		case "none":
-			ext = ""
-		default:
-			ext = ".zst" // 默认使用 zstd
-		}
+		ext := compress.Extension(req.CompressMethod, false, req.BackupPassword != "")
 		archiveName := fmt.Sprintf("%s_%s%s", timeStr, fileNameWithoutExt, ext)
-		archivePath = filepath.Join(os.TempDir(), archiveName)
+		archivePath = filepath.Join(workDir, archiveName)
 
 		// 压缩单个文件
 		compressMethod := req.CompressMethod
@@ -97,7 +99,7 @@ func FileBackup(req FileBackupRequest) error {
 			compressMethod = "zstd" // 默认使用 zstd
 		}
 		logger.Info("正在压缩文件", "method", compressMethod, "file", sourceFile)
-		if err := compress.CompressFile(sourceFile, archivePath, compressMethod); err != nil {
+		if err := compress.CompressFile(sourceFile, archivePath, compressMethod, req.BackupPassword); err != nil {
 			logger.Error("压缩文件失败", "error", err)
 			return err
 		}
@@ -108,20 +110,9 @@ func FileBackup(req FileBackupRequest) error {
 		firstFileNameWithoutExt := strings.TrimSuffix(firstFileName, filepath.Ext(firstFileName))
 		archiveBaseName := fmt.Sprintf("%s_%s_files", timeStr, firstFileNameWithoutExt)
 
-		// 根据压缩方式确定文件扩展名
-		var ext string
-		switch req.CompressMethod {
-		case "gzip":
-			ext = ".tgz"
-		case "zstd", "":
-			ext = ".tar.zst"
-		case "none":
-			ext = ".tar"
-		default:
-			ext = ".tar.zst" // 默认使用 zstd
-		}
+		ext := compress.Extension(req.CompressMethod, true, req.BackupPassword != "")
 		archiveName := archiveBaseName + ext
-		archivePath = filepath.Join(os.TempDir(), archiveName)
+		archivePath = filepath.Join(workDir, archiveName)
 
 		// 压缩多个文件
 		compressMethod := req.CompressMethod
@@ -129,11 +120,13 @@ func FileBackup(req FileBackupRequest) error {
 			compressMethod = "zstd" // 默认使用 zstd
 		}
 		logger.Info("正在压缩多个文件", "method", compressMethod, "count", len(validFiles))
-		if err := compress.CompressFiles(validFiles, archivePath, compressMethod); err != nil {
+		if err := compress.CompressFiles(validFiles, archivePath, compressMethod, req.BackupPassword); err != nil {
 			logger.Error("压缩文件失败", "error", err)
 			return err
 		}
 	}
+
+	keepBackup = req.KeepBackupFiles
 
 	// 获取文件大小
 	fileInfo, err := os.Stat(archivePath)
@@ -164,6 +157,7 @@ func FileBackup(req FileBackupRequest) error {
 	logger.Info("正在上传到OSS")
 	ossConfig := oss.Config{
 		Endpoint:     req.OSSEndpoint,
+		Region:       req.OSSRegion,
 		AccessKey:    req.OSSAccessKey,
 		SecretKey:    req.OSSSecretKey,
 		Bucket:       req.OSSBucket,
@@ -172,9 +166,6 @@ func FileBackup(req FileBackupRequest) error {
 
 	if err := oss.UploadFile(archivePath, ossConfig); err != nil {
 		logger.Error("上传到OSS失败", "error", err)
-		if !req.KeepBackupFiles {
-			os.Remove(archivePath) // 清理临时文件
-		}
 		return err
 	}
 
@@ -182,7 +173,6 @@ func FileBackup(req FileBackupRequest) error {
 	if req.KeepBackupFiles {
 		logger.Info("文件备份完成，备份文件已保留", "count", len(validFiles), "backup_file", archivePath)
 	} else {
-		os.Remove(archivePath)
 		logger.Info("文件备份完成", "count", len(validFiles))
 	}
 

@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-
 	"path/filepath"
 	"strings"
 	"time"
@@ -24,8 +23,10 @@ type ConsulBackupRequest struct {
 	ConsulToken     string // Consul ACL Token（可选）
 	Stale           bool   // 是否允许从非 leader 节点获取快照
 	CompressMethod  string // 压缩方式 (zstd/gzip/none)
-	KeepBackupFiles bool   // 是否保留备份文件
+	BackupPassword  string
+	KeepBackupFiles bool // 是否保留备份文件
 	OSSEndpoint     string
+	OSSRegion       string
 	OSSAccessKey    string
 	OSSSecretKey    string
 	OSSBucket       string
@@ -51,7 +52,17 @@ func ConsulBackup(req ConsulBackupRequest) error {
 	now := time.Now()
 	timeStr := now.Format("20060102-150405")
 	snapshotName := fmt.Sprintf("consul-snapshot-%s.snap", timeStr)
-	tempSnapshotPath := filepath.Join(os.TempDir(), snapshotName)
+	workDir, err := os.MkdirTemp("", "backup-to-oss-")
+	if err != nil {
+		return fmt.Errorf("创建备份临时目录失败: %w", err)
+	}
+	keepBackup := false
+	defer func() {
+		if !keepBackup {
+			os.RemoveAll(workDir)
+		}
+	}()
+	tempSnapshotPath := filepath.Join(workDir, snapshotName)
 	unverifiedPath := tempSnapshotPath + ".unverified"
 
 	// 先写入未验证的文件
@@ -96,7 +107,6 @@ func ConsulBackup(req ConsulBackupRequest) error {
 	if err := safeio.Rename(unverifiedPath, tempSnapshotPath); err != nil {
 		return fmt.Errorf("重命名 snapshot 文件失败: %v", err)
 	}
-	// tempSnapshotPath 在压缩完成后会被删除（如果 KeepBackupFiles 为 false，则通过 defer 删除）
 
 	// 执行 inspect 操作验证 snapshot 完整性
 	logger.Info("正在执行 snapshot inspect 操作")
@@ -138,29 +148,19 @@ func ConsulBackup(req ConsulBackupRequest) error {
 		compressMethod = "zstd" // 默认使用 zstd
 	}
 
-	// 根据压缩方式确定文件扩展名
-	var ext string
-	switch compressMethod {
-	case "gzip":
-		ext = ".gz"
-	case "zstd":
-		ext = ".zst"
-	case "none":
-		ext = ""
-	default:
-		ext = ".zst" // 默认使用 zstd
-	}
+	ext := compress.Extension(compressMethod, false, req.BackupPassword != "")
 	compressedPath := tempSnapshotPath + ext
-	logger.Info("正在压缩 snapshot 文件", "method", compressMethod)
-	if err := compress.CompressFile(tempSnapshotPath, compressedPath, compressMethod); err != nil {
-		return fmt.Errorf("压缩 snapshot 文件失败: %v", err)
+	if compressMethod != "none" || req.BackupPassword != "" {
+		logger.Info("正在处理 snapshot 文件", "method", compressMethod, "encrypted", req.BackupPassword != "")
+		if err := compress.CompressFile(tempSnapshotPath, compressedPath, compressMethod, req.BackupPassword); err != nil {
+			return fmt.Errorf("处理 snapshot 文件失败: %w", err)
+		}
+		if err := os.Remove(tempSnapshotPath); err != nil {
+			return fmt.Errorf("清理原始 snapshot 文件失败: %w", err)
+		}
 	}
-	// 压缩完成后删除未压缩的临时文件
-	if !req.KeepBackupFiles {
-		os.Remove(tempSnapshotPath)
-		defer os.Remove(compressedPath)
-	} else {
-		os.Remove(tempSnapshotPath) // 只保留压缩后的文件
+	keepBackup = req.KeepBackupFiles
+	if keepBackup {
 		logger.Info("备份文件已保留", "path", compressedPath)
 	}
 
@@ -206,6 +206,7 @@ func ConsulBackup(req ConsulBackupRequest) error {
 	logger.Info("正在上传 snapshot 到 OSS")
 	ossConfig := oss.Config{
 		Endpoint:     req.OSSEndpoint,
+		Region:       req.OSSRegion,
 		AccessKey:    req.OSSAccessKey,
 		SecretKey:    req.OSSSecretKey,
 		Bucket:       req.OSSBucket,

@@ -4,8 +4,10 @@ Copyright © 2025 NAME HERE <EMAIL ADDRESS>
 package cmd
 
 import (
+	"fmt"
 	"os"
 
+	"backup-to-oss/internal/config"
 	"backup-to-oss/internal/logger"
 
 	"github.com/spf13/cobra"
@@ -60,6 +62,22 @@ func Execute() {
 	}
 }
 
+func loadBackupConfig() (*config.Config, error) {
+	cfg, err := config.LoadConfig(envFile)
+	if err != nil {
+		return nil, err
+	}
+	if compressMethod != "" {
+		cfg.CompressMethod = compressMethod
+	}
+	switch cfg.CompressMethod {
+	case "zstd", "gzip", "none":
+		return cfg, nil
+	default:
+		return nil, fmt.Errorf("不支持的压缩方式 %q（支持 zstd、gzip、none）", cfg.CompressMethod)
+	}
+}
+
 func init() {
 	// Here you will define your flags and configuration settings.
 	// Cobra supports persistent flags, which, if defined here,
@@ -78,7 +96,7 @@ func init() {
 	// 添加 .env 文件路径选项
 	rootCmd.PersistentFlags().StringVar(&envFile, "env-file", "", ".env 配置文件路径（默认为当前目录下的 .env 文件）")
 	// 添加压缩方式选项
-	rootCmd.PersistentFlags().StringVarP(&compressMethod, "compress", "c", "zstd", "压缩方式 (zstd/gzip/none)，可通过 COMPRESS_METHOD 环境变量设置，默认为 zstd")
+	rootCmd.PersistentFlags().StringVarP(&compressMethod, "compress", "c", "", "压缩方式 (zstd/gzip/none)，可通过 COMPRESS_METHOD 环境变量设置，默认为 zstd")
 	// 添加保留备份文件选项
 	rootCmd.PersistentFlags().BoolVar(&keepBackupFiles, "keep-backup-files", false, "保留备份文件（打包压缩后的文件），不上传到OSS后删除，可通过 KEEP_BACKUP_FILES 环境变量设置")
 	// 添加全局 OSS 配置选项
